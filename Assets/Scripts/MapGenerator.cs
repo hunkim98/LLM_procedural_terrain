@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.IO;
 using UnityEngine;
 
@@ -33,17 +34,7 @@ public class MapGenerator : MonoBehaviour
     void Start()
     {
         Initialize();
-        Debug.Log(mapTiles.Length);
-        if (mapTiles.Length > 0) 
-        {
-            GameObject mapTile = mapTiles[0];
-            // Get Sprite
-            SpriteRenderer spriteRenderer = mapTile.GetComponent<SpriteRenderer>();
-            // Get sprite size
-            Vector2 spriteSize = spriteRenderer.sprite.bounds.size;
-            Vector2 scaledSize = spriteSize * mapTile.transform.localScale;
-            this.spriteSquareSize = scaledSize.x;
-        }
+  
     }
 
     // Update is called once per frame
@@ -61,6 +52,7 @@ public class MapGenerator : MonoBehaviour
         var camera = Camera.main;
         float cameraWidth = camera.orthographicSize * 2 * camera.aspect;
         float cameraHeight = camera.orthographicSize * 2;
+        this.spriteSquareSize = cameraWidth;
 
 
         Debug.Log("Camera width: " + cameraWidth);
@@ -91,16 +83,30 @@ public class MapGenerator : MonoBehaviour
     {
         byte[] imageBytes = File.ReadAllBytes(imagePath);
         Texture2D texture = new Texture2D(2, 2);
+        string tileId = TileTools.GenerateId((int)tileIndex.x, (int)tileIndex.y);
+        spriteRenderStatusDict[tileId] = SpriteRenderStatus.Pending;
         if (texture.LoadImage(imageBytes))
         {
             GameObject spriteGameObject = new GameObject();
             Sprite sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
             // scale the sprite to the size of spriteSquareSize
-            float scale = spriteSquareSize / sprite.bounds.size.x;
+            // float scale = spriteSquareSize / sprite.texture.width;
+            // float scale = 1;
+            // add sprite to the game object
+            spriteGameObject.AddComponent<SpriteRenderer>().sprite = sprite;
+            // get size of the game object
+            Vector2 spriteSize = spriteGameObject.GetComponent<SpriteRenderer>().bounds.size;
+            float scale = spriteSquareSize / spriteSize.x;
             spriteGameObject.transform.localScale = new Vector3(scale, scale, 1);
             // position the game object
             spriteGameObject.transform.position = new Vector3(tileIndex.x * spriteSquareSize, tileIndex.y * spriteSquareSize, 0);
+            // add the game object to the map container
+            spriteGameObject.transform.parent = mapContainer.transform;
             Debug.Log("Image loaded successfully");
+            // change the name of the game object
+            spriteGameObject.name = tileId;
+            spriteRenderStatusDict[tileId] = SpriteRenderStatus.Rendered;
+
             return spriteGameObject;
         }
         else
