@@ -122,7 +122,6 @@ def main():
         checkpointloadersimple_1 = checkpointloadersimple.load_checkpoint(
             ckpt_name="pixelXL_xl.safetensors"
         )
-        print("loaded?")
 
         emptylatentimage = NODE_CLASS_MAPPINGS["EmptyLatentImage"]()
         emptylatentimage_2 = emptylatentimage.generate(
@@ -150,7 +149,6 @@ def main():
         )
 
         ksampler_efficient = NODE_CLASS_MAPPINGS["KSampler (Efficient)"]()
-        saveimage = SaveImage()
 
         for q in range(1):
             ksampler_efficient_5 = ksampler_efficient.sample(
