@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
+from fastapi.responses import StreamingResponse
 import uvicorn
 from typing import Union
 import random
 from PIL import Image
 import numpy as np
+from io import BytesIO
 
 from fastapi import FastAPI
 import torch
@@ -70,46 +72,57 @@ def read_root():
 
 
 @app.get("/gen")
-def gen(pos_prompt: str = "", neg_prompt: str = ""):
+def gen(
+    pos_prompt: str = "",
+    neg_prompt: str = "3D, walls, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, unrealistic, human, living",
+):
     with torch.inference_mode():
         checkpoint = app.package["checkpoint"]
         loraloader = app.package["lora_loader"]
-        ksampler = app.package["ksampler"]
-        image = app.package["empty_latent_image"]
+        # ksampler = app.package["ksampler"]
+        ksampler = NODE_CLASS_MAPPINGS["KSampler"]()
+        vaedecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
+        latent_image = app.package["empty_latent_image"]
         clip_encode = app.package["clip_encode"]
 
-        negative_encode = clip_encode.encode(
-            text="3D, walls, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, unrealistic, human, living",
-            clip=get_value_at_index(loraloader, 1),
-        )
         positive_encode = clip_encode.encode(
             text="A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
             clip=get_value_at_index(loraloader, 1),
         )
 
-        ksampler_efficient_5 = ksampler.sample(
+        negative_encode = clip_encode.encode(
+            text=neg_prompt,
+            clip=get_value_at_index(loraloader, 1),
+        )
+
+        print(positive_encode, negative_encode)
+
+        ksampler_8 = ksampler.sample(
             seed=random.randint(1, 2**64),
             steps=20,
-            cfg=4,
+            cfg=2.98,
             sampler_name="ddim",
             scheduler="karras",
             denoise=1,
-            preview_method="auto",
-            vae_decode="true",
             model=get_value_at_index(loraloader, 0),
             positive=get_value_at_index(positive_encode, 0),
             negative=get_value_at_index(negative_encode, 0),
-            latent_image=get_value_at_index(image, 0),
-            optional_vae=get_value_at_index(checkpoint, 2),
+            latent_image=get_value_at_index(latent_image, 0),
         )
 
-        final_image = get_value_at_index(ksampler_efficient_5, 5)[0]
+        vaedecode_9 = vaedecode.decode(
+            samples=get_value_at_index(ksampler_8, 0),
+            vae=get_value_at_index(checkpoint, 2),
+        )
+
+        final_image = get_value_at_index(vaedecode_9, 0)[0]
         final_image = 255.0 * final_image.cpu().numpy()
         final_image = Image.fromarray(np.clip(final_image, 0, 255).astype(np.uint8))
-        print(final_image)
+        img_bytes = BytesIO()
+        final_image.save(img_bytes, format="PNG")
+        final_image.seek(0)
 
-        final_image.save("output1.png")
-    print("hi")
+        return StreamingResponse(img_bytes, media_type="image/png")
 
 
 def start_server():
