@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 from typing import Union
 import random
@@ -7,7 +7,7 @@ from PIL import Image
 import numpy as np
 from io import BytesIO
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 import torch
 
 from image_gen import get_value_at_index, import_custom_nodes, NODE_CLASS_MAPPINGS
@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
         checkpointloadersimple_1 = checkpointloadersimple.load_checkpoint(
             ckpt_name="pixelXL_xl.safetensors"
         )
+        loadimage = NODE_CLASS_MAPPINGS["LoadImage"]()
 
         emptylatentimage = NODE_CLASS_MAPPINGS["EmptyLatentImage"]()
         emptylatentimage_2 = emptylatentimage.generate(
@@ -47,14 +48,18 @@ async def lifespan(app: FastAPI):
 
         ksampler_efficient = NODE_CLASS_MAPPINGS["KSampler (Efficient)"]()
 
+        vaeencodeforinpaint = NODE_CLASS_MAPPINGS["VAEEncodeForInpaint"]()
+
         app.package = {
             "checkpoint": checkpointloadersimple_1,
             "clip_encode": cliptextencode,
             "empty_latent_image": emptylatentimage_2,
             "lora_loader": loraloader_6,
             "ksampler": ksampler_efficient,
+            "load_image": loadimage,
+            "vae_encode_for_inpaint": vaeencodeforinpaint,
         }
-        print(app.package)
+        # print(app.package)
 
     # Startup logic
     print("Application startup")
@@ -73,7 +78,7 @@ def read_root():
 
 @app.get("/gen")
 def gen(
-    pos_prompt: str = "",
+    pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
     neg_prompt: str = "3D, walls, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, unrealistic, human, living",
 ):
     with torch.inference_mode():
@@ -86,7 +91,7 @@ def gen(
         clip_encode = app.package["clip_encode"]
 
         positive_encode = clip_encode.encode(
-            text="A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
+            text=pos_prompt,
             clip=get_value_at_index(loraloader, 1),
         )
 
@@ -94,8 +99,6 @@ def gen(
             text=neg_prompt,
             clip=get_value_at_index(loraloader, 1),
         )
-
-        print(positive_encode, negative_encode)
 
         ksampler_8 = ksampler.sample(
             seed=random.randint(1, 2**64),
@@ -118,11 +121,83 @@ def gen(
         final_image = get_value_at_index(vaedecode_9, 0)[0]
         final_image = 255.0 * final_image.cpu().numpy()
         final_image = Image.fromarray(np.clip(final_image, 0, 255).astype(np.uint8))
+
         img_bytes = BytesIO()
         final_image.save(img_bytes, format="PNG")
-        final_image.seek(0)
+        img_bytes.seek(0)
 
         return StreamingResponse(img_bytes, media_type="image/png")
+
+
+@app.post("/inpaint")
+async def inpaint(
+    image_file: UploadFile = File(...),
+    pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
+    neg_prompt: str = "3D, walls, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, unrealistic, human, living",
+):
+    # Read the image file
+    contents = await image_file.read()
+    if not image_file.content_type.startswith("image/"):
+        return JSONResponse(content={"error": "Invalid file type"}, status_code=400)
+
+    # Save the file as a temporary file
+    with open("temp.png", "wb") as f:
+        f.write(contents)
+
+    with torch.inference_mode():
+        checkpoint = app.package["checkpoint"]
+        loraloader = app.package["lora_loader"]
+        # ksampler = app.package["ksampler"]
+        ksampler = NODE_CLASS_MAPPINGS["KSampler"]()
+        vaedecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
+        latent_image = app.package["empty_latent_image"]
+        clip_encode = app.package["clip_encode"]
+        load_image = app.package["load_image"]
+        vae_encode_for_inpaint = app.package["vae_encode_for_inpaint"]
+
+        loadimage_193 = load_image.load_image(image="temp.png")
+
+        vaeencodeforinpaint_213 = vae_encode_for_inpaint.encode(
+            grow_mask_by=3,
+            pixels=get_value_at_index(loadimage_193, 0),
+            vae=get_value_at_index(checkpoint, 2),
+            mask=get_value_at_index(loadimage_193, 1),
+        )
+
+        positive_encode = clip_encode.encode(
+            text=pos_prompt,
+            clip=get_value_at_index(loraloader, 1),
+        )
+
+        negative_encode = clip_encode.encode(
+            text=neg_prompt,
+            clip=get_value_at_index(loraloader, 1),
+        )
+
+        ksampler_8 = ksampler.sample(
+            seed=random.randint(1, 2**64),
+            steps=20,
+            cfg=3,
+            sampler_name="ddim",
+            scheduler="karras",
+            denoise=1,
+            model=get_value_at_index(loraloader, 0),
+            positive=get_value_at_index(positive_encode, 0),
+            negative=get_value_at_index(negative_encode, 0),
+            latent_image=get_value_at_index(vaeencodeforinpaint_213, 0),
+        )
+
+        vaedecode_9 = vaedecode.decode(
+            samples=get_value_at_index(ksampler_8, 0),
+            vae=get_value_at_index(checkpoint, 2),
+        )
+
+        final_image = get_value_at_index(vaedecode_9, 0)[0]
+        final_image = 255.0 * final_image.cpu().numpy()
+        final_image = Image.fromarray(np.clip(final_image, 0, 255).astype(np.uint8))
+        img_bytes = BytesIO()
+        final_image.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
 
 
 def start_server():
