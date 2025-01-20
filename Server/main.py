@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
+import asyncio
 from typing import Union
 import random
 from PIL import Image
@@ -79,7 +80,7 @@ def read_root():
 @app.get("/gen")
 def gen(
     pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
-    neg_prompt: str = "3D, walls, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, unrealistic, human, living",
+    neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living",
 ):
     with torch.inference_mode():
         checkpoint = app.package["checkpoint"]
@@ -129,20 +130,36 @@ def gen(
         return StreamingResponse(img_bytes, media_type="image/png")
 
 
+async def wait_for_file(filepath: str, timeout: int = 10, interval: float = 0.5):
+    """Waits for the file to be available with a timeout."""
+    start_time = asyncio.get_event_loop().time()
+    while not os.path.exists(filepath):
+        await asyncio.sleep(interval)
+        if asyncio.get_event_loop().time() - start_time > timeout:
+            raise FileNotFoundError(
+                f"File {filepath} not found within {timeout} seconds."
+            )
+
+
 @app.post("/inpaint")
 async def inpaint(
     image_file: UploadFile = File(...),
-    pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
-    neg_prompt: str = "3D, walls, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, unrealistic, human, living",
+    pos_prompt: str = "A 2D game sprite, natural, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world, connected, smooth transition, natural",
+    neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, unconnected roads",
 ):
     # Read the image file
     contents = await image_file.read()
     if not image_file.content_type.startswith("image/"):
         return JSONResponse(content={"error": "Invalid file type"}, status_code=400)
-
+    temp_filename = "temp.png"
+    ComfyUI_image_dir = "ComfyUI/input/"
+    temp_filepath = ComfyUI_image_dir + temp_filename
     # Save the file as a temporary file
-    with open("temp.png", "wb") as f:
+    with open(temp_filepath, "wb") as f:
         f.write(contents)
+
+    # Wait for the file to be available before processing
+    await wait_for_file(temp_filepath)
 
     with torch.inference_mode():
         checkpoint = app.package["checkpoint"]
@@ -198,6 +215,8 @@ async def inpaint(
         img_bytes = BytesIO()
         final_image.save(img_bytes, format="PNG")
         img_bytes.seek(0)
+
+        return StreamingResponse(img_bytes, media_type="image/png")
 
 
 def start_server():
