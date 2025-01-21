@@ -3,6 +3,7 @@ using UnityEngine.Networking;
 using System.IO;
 using System;
 using System.Threading.Tasks;
+using System.Collections.Generic;
 
 public class ServerClient : MonoBehaviour
 {
@@ -14,7 +15,9 @@ public class ServerClient : MonoBehaviour
     public event Action<string> OnGenerateImageError;
 
     // Events for inpainting an image
-    public event Action<Texture2D> OnInpaintImageSuccess;
+    // it will return the texture and the location of the inpainted image
+    public event Action<Texture2D, Vector2> OnInpaintImageSuccess;
+
     public event Action<string> OnInpaintImageError;
 
     // Call the /gen endpoint (GET request)
@@ -27,7 +30,6 @@ public class ServerClient : MonoBehaviour
         {
             Texture2D texture = await GetImageAsync(url);
             OnGenerateImageSuccess?.Invoke(texture);
-            ApplyTextureToGameObject(texture);
         }
         catch (Exception ex)
         {
@@ -41,14 +43,15 @@ public class ServerClient : MonoBehaviour
         string endpoint = "/inpaint";
         string url = baseUrl + endpoint;
         string savedImagePath = ProcessImage(targetGameObject);
-        
+
         if (savedImagePath != null)
         {
             try
             {
-                Texture2D texture = await PostImageAsync(url, savedImagePath, location);
-                OnInpaintImageSuccess?.Invoke(texture);
-                ApplyTextureToGameObject(texture);
+                (Texture2D texture, Vector2 returnedLocation) = await PostImageAsync(url, savedImagePath, location);
+
+                // Fire event with both texture and returned location
+                OnInpaintImageSuccess?.Invoke(texture, returnedLocation);
             }
             catch (Exception ex)
             {
@@ -85,7 +88,7 @@ public class ServerClient : MonoBehaviour
     }
 
     // Asynchronous function to POST an image
-    private async Task<Texture2D> PostImageAsync(string url, string imagePath, Vector2 location)
+    private async Task<(Texture2D, Vector2)> PostImageAsync(string url, string imagePath, Vector2 location)
     {
         if (!File.Exists(imagePath))
         {
@@ -96,7 +99,7 @@ public class ServerClient : MonoBehaviour
         WWWForm form = new WWWForm();
         form.AddBinaryData("image_file", imageBytes, Path.GetFileName(imagePath), "image/png");
 
-        // add field makes additional data sent to the server
+        // Add location data
         form.AddField("x", location.x.ToString());
         form.AddField("y", location.y.ToString());
 
@@ -111,7 +114,32 @@ public class ServerClient : MonoBehaviour
 
             if (request.result == UnityWebRequest.Result.Success)
             {
-                return DownloadHandlerTexture.GetContent(request);
+                // Parse multipart response
+                string contentType = request.GetResponseHeader("Content-Type");
+                if (contentType != null && contentType.Contains("multipart"))
+                {
+                    // Split the multipart response
+                    string responseText = request.downloadHandler.text;
+                    string[] parts = responseText.Split(new string[] { "\r\n--" }, StringSplitOptions.None);
+
+                    // Extract JSON metadata and texture separately
+                    string jsonPart = parts[0];
+                    string imagePart = parts[1];
+
+                    // Parse JSON for coordinates
+                    var json = JsonUtility.FromJson<Dictionary<string, string>>(jsonPart);
+                    float x = float.Parse(json["x"]);
+                    float y = float.Parse(json["y"]);
+
+                    Texture2D texture = new Texture2D(2, 2);
+                    texture.LoadImage(Convert.FromBase64String(imagePart));
+
+                    return (texture, new Vector2(x, y));
+                }
+                else
+                {
+                    throw new Exception("Invalid response format.");
+                }
             }
             else
             {
@@ -119,7 +147,6 @@ public class ServerClient : MonoBehaviour
             }
         }
     }
-
     // Image processing: modify sprite and save locally
     private string ProcessImage(GameObject targetGameObject)
     {
@@ -172,20 +199,5 @@ public class ServerClient : MonoBehaviour
         newTexture.Apply();
 
         return newTexture;
-    }
-
-    // Apply received image to the target GameObject
-    private void ApplyTextureToGameObject(Texture2D newTexture)
-    {
-        if (targetGameObject != null)
-        {
-            targetGameObject.GetComponent<SpriteRenderer>().sprite = Sprite.Create(
-                newTexture,
-                new Rect(0, 0, newTexture.width, newTexture.height),
-                new Vector2(0.5f, 0.5f)
-            );
-
-            Debug.Log("New image applied to GameObject.");
-        }
     }
 }

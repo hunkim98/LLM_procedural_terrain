@@ -33,9 +33,11 @@ public class MapGenerator : MonoBehaviour
 
     private float spriteSquareSize;
 
-    private Dictionary<String, SpriteRenderStatus> spriteRenderStatusDict;
+    private Dictionary<string, SpriteRenderStatus> spriteRenderStatusDict;
 
     private ServerClient serverClient;
+
+    public Vector2 playerPosTileIndex;
 
 
     public bool isGameTileMapInitialzied
@@ -82,8 +84,6 @@ public class MapGenerator : MonoBehaviour
         Vector3 userPosition = Camera.main.transform.position;
         CheckAdditionalMapTile(new Vector2(userPosition.x, userPosition.y));
 
-        string initialTileId = TileTools.GenerateId(0, 0);
-
     }
 
     GameObject GetTileMapAt(Vector2 tileIndex)
@@ -116,25 +116,28 @@ public class MapGenerator : MonoBehaviour
         Vector2 bottomLeftPosInt = new Vector2((int)Math.Round(bottomLeftPos.x / (spriteSquareSize / 2)), (int)Math.Round(bottomLeftPos.y / (spriteSquareSize / 2)));
         Vector2 bottomRightPosInt = new Vector2((int)Math.Round(bottomRightPos.x / (spriteSquareSize / 2)), (int)Math.Round(bottomRightPos.y / (spriteSquareSize / 2)));
 
-        Debug.Log("Top: " + topPosInt.x + "-" + topPosInt.y);
-        // Debug.Log("Right: " + rightPosInt.x + "-" + rightPosInt.y);
-        // Debug.Log("Bottom: " + bottomPosInt.x + "-" + bottomPosInt.y);
-        // Debug.Log("Left: " + leftPosInt.x + "-" + leftPosInt.y);
-
-        // Debug.Log("TopLeft: " + topLeftPosInt.x + "-" + topLeftPosInt.y);
-        // Debug.Log("TopRight: " + topRightPosInt.x + "-" + topRightPosInt.y); 
-        // Debug.Log("BottomLeft: " + bottomLeftPosInt.x + "-" + bottomLeftPosInt.y);
-        // Debug.Log("BottomRight: " + bottomRightPosInt.x + "-" + bottomRightPosInt.y);
-
-        Vector2[] checkPositions = new Vector2[] { topPosInt, bottomPosInt, leftPosInt, rightPosInt, topLeftPosInt, topRightPosInt, bottomLeftPosInt, bottomRightPosInt };
-        for (int i = 0; i < checkPositions.Length; i++)
+        Dictionary<ExtendDirection, Vector2> directionTileIndex = new Dictionary<ExtendDirection, Vector2>
         {
-            // check if the key is contianed
-            string checkPositionTileId = TileTools.GenerateId((int)checkPositions[i].x, (int)checkPositions[i].y);
-            if (!spriteRenderStatusDict.ContainsKey(checkPositionTileId))
+            {ExtendDirection.Up, topPosInt},
+            {ExtendDirection.Down, bottomPosInt},
+            {ExtendDirection.Left, leftPosInt},
+            {ExtendDirection.Right, rightPosInt},
+            {ExtendDirection.TopLeft, topLeftPosInt},
+            {ExtendDirection.TopRight, topRightPosInt},
+            {ExtendDirection.BottomLeft, bottomLeftPosInt},
+            {ExtendDirection.BottomRight, bottomRightPosInt}
+        };
+
+        for (int i = 0; i < directionTileIndex.Count; i++)
+        {
+            ExtendDirection direction = (ExtendDirection)i;
+            Vector2 tileIndex = directionTileIndex[direction];
+            string tileId = TileTools.GenerateId((int)tileIndex.x, (int)tileIndex.y);
+            if (!spriteRenderStatusDict.ContainsKey(tileId))
             {
                 // Generate the tile
-                GenerateAdditionalMapTile((int)checkPositions[i].x, (int)checkPositions[i].y);
+                // Debug.Log((int)tileIndex.x + ", " + (int)tileIndex.y);
+                GenerateAdditionalMapTile((int)tileIndex.x, (int)tileIndex.y, direction);
             }
         }
 
@@ -146,7 +149,7 @@ public class MapGenerator : MonoBehaviour
         var camera = Camera.main;
         float cameraWidth = camera.orthographicSize * 2 * camera.aspect;
         float cameraHeight = camera.orthographicSize * 2;
-        this.spriteSquareSize = cameraWidth;
+        this.spriteSquareSize = cameraWidth * 1.2f;
 
 
         Debug.Log("Camera width: " + cameraWidth);
@@ -182,7 +185,7 @@ public class MapGenerator : MonoBehaviour
         Debug.LogError(error);
     }
 
-    void HandleInpaintImageSuccess(Texture2D texture)
+    void HandleInpaintImageSuccess(Texture2D texture, Vector2 tileIndex)
     {
         // we will need to know the tile index also
         Debug.Log("Image inpainted successfully");
@@ -236,9 +239,27 @@ public class MapGenerator : MonoBehaviour
 
 
 
-    GameObject GenerateAdditionalMapTile(int indexX, int indexY, string imagePath = "Assets/Images/example.jpeg")
+    GameObject GenerateAdditionalMapTile(int indexX, int indexY, ExtendDirection direction, string imagePath = "Assets/Images/example.jpeg")
     {
         string tileId = TileTools.GenerateId(indexX, indexY);
+        if (spriteRenderStatusDict.ContainsKey(tileId))
+        {
+            return null;
+        }
+        Vector3 userPosition = Camera.main.transform.position;
+        Vector2 currentTileIndex = new Vector2((int)Math.Round(userPosition.x / (spriteSquareSize / 2)), (int)Math.Round(userPosition.y / (spriteSquareSize / 2)));
+        Texture2D sourceTexture = CreateInpaintSourceTexture(new Vector2((int)currentTileIndex.x, (int)currentTileIndex.y), direction);
+        if (sourceTexture == null)
+        {
+            return null;
+        }
+        byte[] imageBytes = sourceTexture.EncodeToPNG();
+
+        string filePath = Path.Combine(Application.persistentDataPath, "InpaintSource" + Enum.GetName(typeof(ExtendDirection), direction) + ".png");
+        File.WriteAllBytes(filePath, imageBytes);
+
+        Debug.Log("Inpaint source image saved to: " + filePath);
+
         spriteRenderStatusDict.Add(tileId, SpriteRenderStatus.Pending);
         // GameObject spriteObject = CreateSpriteGameObject(imagePath, new Vector2(indexX, indexY));
         // spriteRenderStatusDict[tileId] = SpriteRenderStatus.Rendered;
@@ -252,7 +273,90 @@ public class MapGenerator : MonoBehaviour
 
         if (!isDiagonalDirection)
         {
+            // we just need to extend half of the image
+            Debug.Log("Source tile: " + sourceIndex);
+            GameObject sourceTile = GetTileMapAt(sourceIndex);
+            SpriteRenderer sourceSpriteRenderer = sourceTile.GetComponent<SpriteRenderer>();
+            Sprite sourceSprite = sourceSpriteRenderer.sprite;
+            Texture2D sourceTexture = sourceSprite.texture;
+            int width = sourceTexture.width;
+            int height = sourceTexture.height;
+            Texture2D newTexture = new Texture2D(width, height);
 
+            Color32[] pixels = sourceTexture.GetPixels32();
+            Color32[] newPixels = new Color32[width * height];
+
+            switch (direction)
+            {
+                case ExtendDirection.Up:
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            newPixels[y * width + x] = new Color32(0, 0, 0, 0);
+                        }
+                    }
+                    for (int y = height / 2; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            newPixels[(y - height / 2) * width + x] = pixels[y * width + x];
+                        }
+                    }
+                    break;
+                case ExtendDirection.Down:
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            newPixels[y * width + x] = new Color32(0, 0, 0, 0);
+                        }
+                    }
+                    for (int y = 0; y < height / 2; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            newPixels[(y + height / 2) * width + x] = pixels[y * width + x];
+                        }
+                    }
+                    break;
+                case ExtendDirection.Right:
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            newPixels[y * width + x] = new Color32(0, 0, 0, 0);
+                        }
+                    }
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = width / 2; x < width; x++)
+                        {
+                            newPixels[y * width + (x - width / 2)] = pixels[y * width + x];
+                        }
+                    }
+                    break;
+                case ExtendDirection.Left:
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            newPixels[y * width + x] = new Color32(0, 0, 0, 0);
+                        }
+                    }
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width / 2; x++)
+                        {
+                            newPixels[y * width + (x + width / 2)] = pixels[y * width + x];
+                        }
+                    }
+                    break;
+
+            }
+            newTexture.SetPixels32(newPixels);
+            newTexture.Apply();
+            return newTexture;
         }
         return null;
 

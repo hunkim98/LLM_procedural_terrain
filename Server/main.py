@@ -8,7 +8,7 @@ from PIL import Image
 import numpy as np
 from io import BytesIO
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile
 import torch
 
 from image_gen import get_value_at_index, import_custom_nodes, NODE_CLASS_MAPPINGS
@@ -144,8 +144,14 @@ async def wait_for_file(filepath: str, timeout: int = 10, interval: float = 0.5)
 @app.post("/inpaint")
 async def inpaint(
     image_file: UploadFile = File(...),
-    pos_prompt: str = "A 2D game sprite, natural, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world, connected, smooth transition, natural",
-    neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, unconnected roads",
+    pos_prompt: str = Form(
+        "A 2D game sprite, natural, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world, connected, smooth transition, natural"
+    ),
+    neg_prompt: str = Form(
+        "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, unconnected roads"
+    ),
+    x: int = Form(...),
+    y: int = Form(...),
 ):
     # Read the image file
     contents = await image_file.read()
@@ -193,7 +199,7 @@ async def inpaint(
 
         ksampler_8 = ksampler.sample(
             seed=random.randint(1, 2**64),
-            steps=20,
+            steps=10,
             cfg=3,
             sampler_name="ddim",
             scheduler="karras",
@@ -216,7 +222,20 @@ async def inpaint(
         final_image.save(img_bytes, format="PNG")
         img_bytes.seek(0)
 
-        return StreamingResponse(img_bytes, media_type="image/png")
+    response_data = {
+        "x": x,
+        "y": y,
+    }
+    from starlette.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import Response
+    from starlette.responses import MultipartResponse
+
+    return MultipartResponse(
+        {
+            "metadata": JSONResponse(response_data).body.decode(),
+            "image": StreamingResponse(img_bytes, media_type="image/png"),
+        }
+    )
 
 
 def start_server():
