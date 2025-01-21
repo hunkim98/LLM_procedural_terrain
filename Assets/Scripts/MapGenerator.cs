@@ -5,6 +5,7 @@ using System.Data.Common;
 using System.IO;
 using Unity.VisualScripting;
 using UnityEngine;
+using UnityEngine.Networking;
 
 public enum ExtendDirection
 {
@@ -39,6 +40,8 @@ public class MapGenerator : MonoBehaviour
 
     public Vector2 playerPosTileIndex;
 
+    private string baseUrl = "http://127.0.0.1:8765";  // Change this if your server IP differs
+
 
     public bool isGameTileMapInitialzied
     {
@@ -63,12 +66,6 @@ public class MapGenerator : MonoBehaviour
     void Awake()
     {
         this.serverClient = transform.gameObject.GetComponent<ServerClient>();
-
-        serverClient.OnGenerateImageSuccess += HandleGenerateImageSuccess;
-        serverClient.OnGenerateImageError += HandleGenerateImageError;
-
-        serverClient.OnInpaintImageSuccess += HandleInpaintImageSuccess;
-        serverClient.OnInpaintImageError += HandleInpaintImageError;
     }
 
     void Start()
@@ -81,6 +78,11 @@ public class MapGenerator : MonoBehaviour
     {
         // In this we need to see if a new tile should be placed
         // Get user position
+        var seedId = TileTools.GenerateId(0, 0);
+        if (spriteRenderStatusDict[seedId] == SpriteRenderStatus.Pending)
+        {
+            return;
+        }
         Vector3 userPosition = Camera.main.transform.position;
         CheckAdditionalMapTile(new Vector2(userPosition.x, userPosition.y));
 
@@ -137,7 +139,9 @@ public class MapGenerator : MonoBehaviour
             {
                 // Generate the tile
                 // Debug.Log((int)tileIndex.x + ", " + (int)tileIndex.y);
+                // StartCoroutine(GenerateAdditionalMapTile((int)tileIndex.x, (int)tileIndex.y, direction));
                 GenerateAdditionalMapTile((int)tileIndex.x, (int)tileIndex.y, direction);
+                // StartCoroutine(GenerateAdditionalMapTile((int)tileIndex.x, (int)tileIndex.y, direction));
             }
         }
 
@@ -152,23 +156,29 @@ public class MapGenerator : MonoBehaviour
         this.spriteSquareSize = cameraWidth * 1.2f;
 
 
-        Debug.Log("Camera width: " + cameraWidth);
-        Debug.Log("Camera height: " + cameraHeight);
-
         // We need to initialize 
         this.spriteRenderStatusDict = new Dictionary<string, SpriteRenderStatus>();
         GenerateInitialMapTile();
     }
 
-    void GenerateInitialMapTile()
+    private async void GenerateInitialMapTile()
     {
-        string seedTileId = TileTools.GenerateId(0, 0);
-        string prompt = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world";
-        spriteRenderStatusDict.Add(seedTileId, SpriteRenderStatus.Pending);
-        this.serverClient.GenerateImageAsync(prompt);
-        // In the real world this should generate the initial map tiles 
-        // string imagePath = "Assets/Images/example.jpeg";
-        // GameObject spriteObject = CreateSpriteGameObject(imagePath, new Vector2(0, 0));
+        try
+        {
+            string seedTileId = TileTools.GenerateId(0, 0);
+            string prompt = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world";
+            spriteRenderStatusDict.Add(seedTileId, SpriteRenderStatus.Pending);
+            Debug.Log("Generating image...");
+            Texture2D result = await this.serverClient.GenerateImageAsync(
+                prompt
+            );
+            Debug.Log("Image generated successfully");
+            HandleGenerateImageSuccess(result);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError(e);
+        }
     }
 
     void HandleGenerateImageSuccess(Texture2D texture)
@@ -188,6 +198,14 @@ public class MapGenerator : MonoBehaviour
     void HandleInpaintImageSuccess(Texture2D texture, Vector2 tileIndex)
     {
         // we will need to know the tile index also
+        // save the image to the disk
+        string tileId = TileTools.GenerateId((int)tileIndex.x, (int)tileIndex.y);
+        // string filePath = Path.Combine(Application.persistentDataPath, "Inpaint" + tileId + ".png");
+        // byte[] imageBytes = texture.EncodeToPNG();
+        // File.WriteAllBytes(filePath, imageBytes);
+
+        GameObject spriteGameObject = CreateSpriteGameObject(texture, tileIndex);
+        spriteRenderStatusDict[tileId] = SpriteRenderStatus.Rendered;
         Debug.Log("Image inpainted successfully");
     }
 
@@ -237,34 +255,122 @@ public class MapGenerator : MonoBehaviour
         }
     }
 
+    // private IEnumerator GenerateAdditionalMapTile(int indexX, int indexY, ExtendDirection direction)
+    // {
+    //     // Convert index to ID
+    //     string tileId = TileTools.GenerateId(indexX, indexY);
+
+    //     // If we already have a status for this tile, skip
+    //     if (spriteRenderStatusDict.ContainsKey(tileId))
+    //     {
+    //         yield break;
+    //     }
+
+    //     // Mark this tile as "pending" to avoid duplicates
+    //     spriteRenderStatusDict[tileId] = SpriteRenderStatus.Pending;
+
+    //     // 1) Prepare your local file -> in this example we assume you have a method
+    //     //    CreateInpaintSourceTexture that returns a Texture2D or null
+    //     Vector3 userPosition = Camera.main.transform.position;
+    //     Vector2 currentTileIndex = new Vector2((int)Math.Round(userPosition.x / (spriteSquareSize / 2)), (int)Math.Round(userPosition.y / (spriteSquareSize / 2)));
+    //     Texture2D sourceTexture = CreateInpaintSourceTexture(new Vector2((int)currentTileIndex.x, (int)currentTileIndex.y), direction);
+    //     if (sourceTexture == null)
+    //     {
+    //         // If there's no source, just stop and remove the tile from the dictionary if needed
+    //         spriteRenderStatusDict.Remove(tileId);
+    //         yield break;
+    //     }
+
+    //     // Convert to bytes, write to disk, etc.
+    //     byte[] imageBytes = sourceTexture.EncodeToPNG();
+    //     string directionName = Enum.GetName(typeof(ExtendDirection), direction);
+    //     string filePath = Path.Combine(Application.persistentDataPath, $"InpaintSource_{directionName}.png");
+    //     File.WriteAllBytes(filePath, imageBytes);
+
+    //     Debug.Log("Inpaint source image saved to: " + filePath);
+
+    //     // 2) Create a UnityWebRequest POST form
+    //     WWWForm form = new WWWForm();
+    //     form.AddBinaryData("image_file", imageBytes, Path.GetFileName(filePath), "image/png");
+    //     form.AddField("pos_prompt", "A 2D game sprite, Pixel art...");
+    //     form.AddField("neg_prompt", "3D, walls, unnatural...");
+    //     form.AddField("extend_direction", directionName);
+
+    //     // 3) Send the request
+    //     using (UnityWebRequest request = UnityWebRequest.Post(baseUrl + "/inpaint", form))
+    //     {
+    //         // We want to download a texture from this request
+    //         request.downloadHandler = new DownloadHandlerTexture(true);
+
+    //         // yield return the send operation so the coroutine waits until the request finishes
+    //         yield return request.SendWebRequest();
+
+    //         // 4) Check the result
+    //         if (request.result == UnityWebRequest.Result.Success)
+    //         {
+    //             Texture2D resultTexture = DownloadHandlerTexture.GetContent(request);
+    //             Debug.Log("Inpaint operation succeeded for tile: " + tileId);
+
+    //             // 5) Handle success (create sprite, mark dictionary as rendered, etc.)
+    //             HandleInpaintImageSuccess(resultTexture, new Vector2(indexX, indexY));
+    //         }
+    //         else
+    //         {
+    //             Debug.LogError($"Inpaint request error for tile {tileId}: {request.error}");
+    //             // Optionally revert the dictionary state
+    //             spriteRenderStatusDict.Remove(tileId);
+    //         }
+    //     }
+    // }
 
 
-    GameObject GenerateAdditionalMapTile(int indexX, int indexY, ExtendDirection direction, string imagePath = "Assets/Images/example.jpeg")
+
+    private async void GenerateAdditionalMapTile(int indexX, int indexY, ExtendDirection direction, string imagePath = "Assets/Images/example.jpeg")
     {
-        string tileId = TileTools.GenerateId(indexX, indexY);
-        if (spriteRenderStatusDict.ContainsKey(tileId))
+        try
         {
-            return null;
+            string tileId = TileTools.GenerateId(indexX, indexY);
+            if (spriteRenderStatusDict.ContainsKey(tileId))
+            {
+                return;
+            }
+            Vector3 userPosition = Camera.main.transform.position;
+            Vector2 currentTileIndex = new Vector2((int)Math.Round(userPosition.x / (spriteSquareSize / 2)), (int)Math.Round(userPosition.y / (spriteSquareSize / 2)));
+            Texture2D sourceTexture = CreateInpaintSourceTexture(new Vector2((int)currentTileIndex.x, (int)currentTileIndex.y), direction);
+            if (sourceTexture == null)
+            {
+                return;
+            }
+            byte[] imageBytes = sourceTexture.EncodeToPNG();
+            string directionName = Enum.GetName(typeof(ExtendDirection), direction);
+
+            string filePath = Path.Combine(Application.persistentDataPath, "InpaintSource" + directionName + ".png");
+            File.WriteAllBytes(filePath, imageBytes);
+
+            Debug.Log("Inpainting image..." + directionName);
+            spriteRenderStatusDict.Add(tileId, SpriteRenderStatus.Pending);
+            Texture2D result = await this.serverClient.InpaintImageAsync(
+                filePath,
+                indexX,
+                indexY,
+                directionName,
+                posPrompt: ""
+            );
+            // Save the image to the disk
+            string outputFilePath = Path.Combine(Application.persistentDataPath, "InpaintOutput" + directionName + ".png");
+            byte[] resultBytes = result.EncodeToPNG();
+            File.WriteAllBytes(outputFilePath, resultBytes);
+            Debug.Log("Image inpainted successfully for " + directionName);
+            HandleInpaintImageSuccess(result, new Vector2(indexX, indexY));
         }
-        Vector3 userPosition = Camera.main.transform.position;
-        Vector2 currentTileIndex = new Vector2((int)Math.Round(userPosition.x / (spriteSquareSize / 2)), (int)Math.Round(userPosition.y / (spriteSquareSize / 2)));
-        Texture2D sourceTexture = CreateInpaintSourceTexture(new Vector2((int)currentTileIndex.x, (int)currentTileIndex.y), direction);
-        if (sourceTexture == null)
+        catch (Exception e)
         {
-            return null;
+            Debug.LogError(e);
         }
-        byte[] imageBytes = sourceTexture.EncodeToPNG();
 
-        string filePath = Path.Combine(Application.persistentDataPath, "InpaintSource" + Enum.GetName(typeof(ExtendDirection), direction) + ".png");
-        File.WriteAllBytes(filePath, imageBytes);
-
-        Debug.Log("Inpaint source image saved to: " + filePath);
-
-        spriteRenderStatusDict.Add(tileId, SpriteRenderStatus.Pending);
         // GameObject spriteObject = CreateSpriteGameObject(imagePath, new Vector2(indexX, indexY));
         // spriteRenderStatusDict[tileId] = SpriteRenderStatus.Rendered;
         // return spriteObject;
-        return null;
     }
 
     private Texture2D CreateInpaintSourceTexture(Vector2 sourceIndex, ExtendDirection direction)
@@ -274,7 +380,6 @@ public class MapGenerator : MonoBehaviour
         if (!isDiagonalDirection)
         {
             // we just need to extend half of the image
-            Debug.Log("Source tile: " + sourceIndex);
             GameObject sourceTile = GetTileMapAt(sourceIndex);
             SpriteRenderer sourceSpriteRenderer = sourceTile.GetComponent<SpriteRenderer>();
             Sprite sourceSprite = sourceSpriteRenderer.sprite;

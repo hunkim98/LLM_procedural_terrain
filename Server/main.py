@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import time
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 import asyncio
@@ -7,18 +8,39 @@ import random
 from PIL import Image
 import numpy as np
 from io import BytesIO
+from fastapi.responses import Response
+from threading import Semaphore
+import threading
 
 from fastapi import FastAPI, File, Form, UploadFile
 import torch
 
 from image_gen import get_value_at_index, import_custom_nodes, NODE_CLASS_MAPPINGS
 
-
+import json
 import os
 import random
 import sys
 from typing import Sequence, Mapping, Any, Union
 import torch
+
+DEBUG = True
+
+
+gpu_lock = threading.Lock()
+
+
+# Create a custom LockableSemaphore class
+class LockableSemaphore(Semaphore):
+    def __enter__(self):
+        self.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+        return False
+
+
+gpu_semaphore = LockableSemaphore(value=2)
 
 
 @asynccontextmanager
@@ -82,6 +104,10 @@ def gen(
     pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
     neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living",
 ):
+    # for efficiency purposes we will return existing image
+    with open("output.png", "rb") as f:
+        return Response(content=f.read(), media_type="image/png")
+
     with torch.inference_mode():
         checkpoint = app.package["checkpoint"]
         loraloader = app.package["lora_loader"]
@@ -103,7 +129,7 @@ def gen(
 
         ksampler_8 = ksampler.sample(
             seed=random.randint(1, 2**64),
-            steps=20,
+            steps=15,
             cfg=2.98,
             sampler_name="ddim",
             scheduler="karras",
@@ -127,7 +153,7 @@ def gen(
         final_image.save(img_bytes, format="PNG")
         img_bytes.seek(0)
 
-        return StreamingResponse(img_bytes, media_type="image/png")
+    return StreamingResponse(img_bytes, media_type="image/png")
 
 
 async def wait_for_file(filepath: str, timeout: int = 10, interval: float = 0.5):
@@ -142,7 +168,7 @@ async def wait_for_file(filepath: str, timeout: int = 10, interval: float = 0.5)
 
 
 @app.post("/inpaint")
-async def inpaint(
+def inpaint(
     image_file: UploadFile = File(...),
     pos_prompt: str = Form(
         "A 2D game sprite, natural, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world, connected, smooth transition, natural"
@@ -152,90 +178,90 @@ async def inpaint(
     ),
     x: int = Form(...),
     y: int = Form(...),
+    extend_direction: str = Form(""),
 ):
+
     # Read the image file
-    contents = await image_file.read()
+    contents = image_file.file.read()
     if not image_file.content_type.startswith("image/"):
         return JSONResponse(content={"error": "Invalid file type"}, status_code=400)
-    temp_filename = "temp.png"
+
+    # Save to temp file
+    temp_filename = "temp" + str(x) + "_" + str(y) + ".png"
     ComfyUI_image_dir = "ComfyUI/input/"
     temp_filepath = ComfyUI_image_dir + temp_filename
-    # Save the file as a temporary file
     with open(temp_filepath, "wb") as f:
         f.write(contents)
 
-    # Wait for the file to be available before processing
-    await wait_for_file(temp_filepath)
-
-    with torch.inference_mode():
-        checkpoint = app.package["checkpoint"]
-        loraloader = app.package["lora_loader"]
-        # ksampler = app.package["ksampler"]
-        ksampler = NODE_CLASS_MAPPINGS["KSampler"]()
-        vaedecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
-        latent_image = app.package["empty_latent_image"]
-        clip_encode = app.package["clip_encode"]
-        load_image = app.package["load_image"]
-        vae_encode_for_inpaint = app.package["vae_encode_for_inpaint"]
-
-        loadimage_193 = load_image.load_image(image="temp.png")
-
-        vaeencodeforinpaint_213 = vae_encode_for_inpaint.encode(
-            grow_mask_by=3,
-            pixels=get_value_at_index(loadimage_193, 0),
-            vae=get_value_at_index(checkpoint, 2),
-            mask=get_value_at_index(loadimage_193, 1),
+    # Ensure file is available (if needed)
+    if not os.path.exists(temp_filepath):
+        return JSONResponse(
+            content={"error": "File not found after write"}, status_code=500
         )
 
-        positive_encode = clip_encode.encode(
-            text=pos_prompt,
-            clip=get_value_at_index(loraloader, 1),
-        )
+    # if DEBUG:
+    #     # we will return existing image for efficiency purposes
+    #     with open("output.png", "rb") as f:
+    #         time.sleep(2)
+    #         return Response(content=f.read(), media_type="image/png")
+    with gpu_lock:
+        with torch.inference_mode():
+            checkpoint = app.package["checkpoint"]
+            loraloader = app.package["lora_loader"]
+            # ksampler = app.package["ksampler"]
+            ksampler = NODE_CLASS_MAPPINGS["KSampler"]()
+            vaedecode = NODE_CLASS_MAPPINGS["VAEDecode"]()
+            clip_encode = app.package["clip_encode"]
+            load_image = app.package["load_image"]
+            vae_encode_for_inpaint = app.package["vae_encode_for_inpaint"]
 
-        negative_encode = clip_encode.encode(
-            text=neg_prompt,
-            clip=get_value_at_index(loraloader, 1),
-        )
+            loadimage_193 = load_image.load_image(image=temp_filename)
 
-        ksampler_8 = ksampler.sample(
-            seed=random.randint(1, 2**64),
-            steps=10,
-            cfg=3,
-            sampler_name="ddim",
-            scheduler="karras",
-            denoise=1,
-            model=get_value_at_index(loraloader, 0),
-            positive=get_value_at_index(positive_encode, 0),
-            negative=get_value_at_index(negative_encode, 0),
-            latent_image=get_value_at_index(vaeencodeforinpaint_213, 0),
-        )
+            vaeencodeforinpaint_213 = vae_encode_for_inpaint.encode(
+                grow_mask_by=3,
+                pixels=get_value_at_index(loadimage_193, 0),
+                vae=get_value_at_index(checkpoint, 2),
+                mask=get_value_at_index(loadimage_193, 1),
+            )
 
-        vaedecode_9 = vaedecode.decode(
-            samples=get_value_at_index(ksampler_8, 0),
-            vae=get_value_at_index(checkpoint, 2),
-        )
+            positive_encode = clip_encode.encode(
+                text=pos_prompt,
+                clip=get_value_at_index(loraloader, 1),
+            )
 
-        final_image = get_value_at_index(vaedecode_9, 0)[0]
-        final_image = 255.0 * final_image.cpu().numpy()
-        final_image = Image.fromarray(np.clip(final_image, 0, 255).astype(np.uint8))
-        img_bytes = BytesIO()
-        final_image.save(img_bytes, format="PNG")
-        img_bytes.seek(0)
+            negative_encode = clip_encode.encode(
+                text=neg_prompt,
+                clip=get_value_at_index(loraloader, 1),
+            )
 
-    response_data = {
-        "x": x,
-        "y": y,
-    }
-    from starlette.responses import JSONResponse, StreamingResponse
-    from fastapi.responses import Response
-    from starlette.responses import MultipartResponse
+            ksampler_8 = ksampler.sample(
+                seed=random.randint(1, 2**64),
+                steps=20,
+                cfg=3,
+                sampler_name="ddim",
+                scheduler="karras",
+                denoise=1,
+                model=get_value_at_index(loraloader, 0),
+                positive=get_value_at_index(positive_encode, 0),
+                negative=get_value_at_index(negative_encode, 0),
+                latent_image=get_value_at_index(vaeencodeforinpaint_213, 0),
+            )
 
-    return MultipartResponse(
-        {
-            "metadata": JSONResponse(response_data).body.decode(),
-            "image": StreamingResponse(img_bytes, media_type="image/png"),
-        }
-    )
+            vaedecode_9 = vaedecode.decode(
+                samples=get_value_at_index(ksampler_8, 0),
+                vae=get_value_at_index(checkpoint, 2),
+            )
+
+            final_image = get_value_at_index(vaedecode_9, 0)[0]
+            final_image = 255.0 * final_image.cpu().numpy()
+            final_image = Image.fromarray(np.clip(final_image, 0, 255).astype(np.uint8))
+            img_bytes = BytesIO()
+            final_image.save(img_bytes, format="PNG")
+            img_bytes.seek(0)
+
+            print("Inpainting done for ", temp_filename)
+            # save file
+            return StreamingResponse(img_bytes, media_type="image/png")
 
 
 def start_server():

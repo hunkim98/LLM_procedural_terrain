@@ -18,6 +18,7 @@ public class Player : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
+
         if (!mapGenerator.isGameTileMapInitialzied)
         {
             // if not initialized, we will not move the player
