@@ -3,14 +3,25 @@ using UnityEngine;
 public class Player : MonoBehaviour
 {
     // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
-    {
-        
+
+    private ServerClient serverClient;
+
+    private MapGenerator mapGenerator;
+
+
+    void Awake() {
+        this.serverClient = transform.gameObject.GetComponent<ServerClient>();
+        this.mapGenerator = transform.gameObject.GetComponent<MapGenerator>();
     }
 
     // Update is called once per frame
     void Update()
     {
+        if(!mapGenerator.isGameTileMapInitialzied)
+        {
+            // if not initialized, we will not move the player
+            return;
+        }
         // get keyboard event left and right top move the player
         float speed = Time.deltaTime * 10f;
         if (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A))
