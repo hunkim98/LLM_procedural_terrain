@@ -107,3 +107,8 @@ archive.zip
 
 # macOS
 .DS_Store
+
+TextMesh Pro/
+
+# all images starting with temp
+temp*.png

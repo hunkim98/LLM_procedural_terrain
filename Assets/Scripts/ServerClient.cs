@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Collections;
 using Cysharp.Threading.Tasks;
+using System.Threading;
 
 
 public class ServerClient : MonoBehaviour
@@ -13,25 +14,52 @@ public class ServerClient : MonoBehaviour
     private string baseUrl = "http://127.0.0.1:8765";  // Change this if your server IP differs
     public GameObject targetGameObject;  // Assign the GameObject with the sprite in Unity
 
+    private CancellationTokenSource cts;
+
+    void Awake()
+    {
+        cts = new CancellationTokenSource();
+    }
+
+
 
     public async UniTask<Texture2D> GenerateImageAsync(string prompt)
     {
         string endpoint = "/gen";
         string url = $"{baseUrl}{endpoint}?pos_prompt={UnityWebRequest.EscapeURL(prompt)}";
 
-        using (var request = UnityWebRequestTexture.GetTexture(url))
+        // Create the request
+        var request = UnityWebRequestTexture.GetTexture(url);
+        var operation = request.SendWebRequest();
+
+
+        try
         {
-            await request.SendWebRequest().ToUniTask(); // Provided by UniTask
+            // Wait until done or canceled
+            await UniTask.WaitUntil(() => operation.isDone, cancellationToken: cts.Token);
 
             if (request.result == UnityWebRequest.Result.Success)
             {
-                Texture2D texture = DownloadHandlerTexture.GetContent(request);
-                return texture;
+                return DownloadHandlerTexture.GetContent(request);
             }
             else
             {
-                throw new Exception($"Error: {request.error}");
+                throw new Exception($"Request failed: {request.error}");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.LogWarning("GenerateImageAsync was canceled.");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Exception in GenerateImageAsync: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            request.Dispose();
         }
     }
 
@@ -52,42 +80,45 @@ public class ServerClient : MonoBehaviour
 
     public async UniTask<Texture2D> InpaintImageAsync(
         string imagePath,
-        int x,
-        int y,
+        int source_x,
+        int source_y,
+        int target_x,
+        int target_y,
         string direction,
         string posPrompt = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
         string negPrompt = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living"
     )
     {
+
         if (!File.Exists(imagePath))
         {
             throw new Exception("Image file not found: " + imagePath);
         }
 
-        // Read the local image bytes
         byte[] imageBytes = File.ReadAllBytes(imagePath);
 
-        // Prepare the form data
         WWWForm form = new WWWForm();
         form.AddBinaryData("image_file", imageBytes, Path.GetFileName(imagePath), "image/png");
         form.AddField("pos_prompt", posPrompt);
         form.AddField("neg_prompt", negPrompt);
-        form.AddField("x", x.ToString());
-        form.AddField("y", y.ToString());
+        form.AddField("source_x", source_x.ToString());
+        form.AddField("source_y", source_y.ToString());
+        form.AddField("target_x", target_x.ToString());
+        form.AddField("target_y", target_y.ToString());
         form.AddField("extend_direction", direction);
 
-        using (UnityWebRequest request = UnityWebRequest.Post(baseUrl + "/inpaint", form))
+        var request = UnityWebRequest.Post(baseUrl + "/inpaint", form);
+        request.downloadHandler = new DownloadHandlerTexture(true);
+
+        var operation = request.SendWebRequest();
+
+        try
         {
-            // We want to download a texture from this request
-            request.downloadHandler = new DownloadHandlerTexture(true);
+            // Wait until done or canceled
+            await UniTask.WaitUntil(() => operation.isDone, cancellationToken: cts.Token);
 
-            // Send request & await completion via UniTask
-            await request.SendWebRequest().ToUniTask();
-
-            // Check for errors
             if (request.result == UnityWebRequest.Result.Success)
             {
-                // Convert response to a Texture2D
                 Texture2D resultTexture = DownloadHandlerTexture.GetContent(request);
                 Debug.Log("Inpaint operation succeeded.");
                 return resultTexture;
@@ -96,6 +127,40 @@ public class ServerClient : MonoBehaviour
             {
                 throw new Exception($"Inpaint request error: {request.error}");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            Debug.LogWarning("InpaintImageAsync was canceled.");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Exception in InpaintImageAsync: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            request.Dispose();
+        }
+    }
+
+    void OnDestroy()
+    {
+        CancelAllRequests();
+    }
+
+    void OnApplicationQuit()
+    {
+        CancelAllRequests();
+    }
+
+    private void CancelAllRequests()
+    {
+        if (cts != null && !cts.IsCancellationRequested)
+        {
+            cts.Cancel();
+            cts.Dispose();
+            Debug.Log("All pending web requests canceled.");
         }
     }
 }

@@ -15,6 +15,12 @@ public class Player : MonoBehaviour
         this.mapGenerator = transform.gameObject.GetComponent<MapGenerator>();
     }
 
+    void isUserOutsideOfRendered()
+    {
+
+    }
+
+
     // Update is called once per frame
     void Update()
     {

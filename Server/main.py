@@ -10,7 +10,9 @@ import numpy as np
 from io import BytesIO
 from fastapi.responses import Response
 from threading import Semaphore
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import threading
+import LLMHelper
 
 from fastapi import FastAPI, File, Form, UploadFile
 import torch
@@ -24,7 +26,15 @@ import sys
 from typing import Sequence, Mapping, Any, Union
 import torch
 
-DEBUG = True
+DEBUG = False
+
+STEPS = 10
+
+USE_LLM = False
+
+NECESSARY_PROMPTS = (
+    "A 2D game sprite, Pixel art, 64 bit, top-view, 2d tilemap, game, flat design"
+)
 
 
 gpu_lock = threading.Lock()
@@ -43,9 +53,14 @@ class LockableSemaphore(Semaphore):
 gpu_semaphore = LockableSemaphore(value=2)
 
 
+def generate_tile_id(x: int, y: int):
+    return f"{x}_{y}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import_custom_nodes()
+
     with torch.inference_mode():
         checkpointloadersimple = NODE_CLASS_MAPPINGS["CheckpointLoaderSimple"]()
         checkpointloadersimple_1 = checkpointloadersimple.load_checkpoint(
@@ -73,6 +88,10 @@ async def lifespan(app: FastAPI):
 
         vaeencodeforinpaint = NODE_CLASS_MAPPINGS["VAEEncodeForInpaint"]()
 
+        llm_helper = LLMHelper.LLMHelper()
+
+        tile_prompts = {}
+
         app.package = {
             "checkpoint": checkpointloadersimple_1,
             "clip_encode": cliptextencode,
@@ -81,6 +100,8 @@ async def lifespan(app: FastAPI):
             "ksampler": ksampler_efficient,
             "load_image": loadimage,
             "vae_encode_for_inpaint": vaeencodeforinpaint,
+            "llm_helper": llm_helper,
+            "tile_prompts": tile_prompts,
         }
         # print(app.package)
 
@@ -88,6 +109,9 @@ async def lifespan(app: FastAPI):
     print("Application startup")
     yield
     # Shutdown logic
+    # save the dictionary to a file
+    with open("tile_prompts.json", "w") as f:
+        json.dump(tile_prompts, f)
     print("Application shutdown haha!")
 
 
@@ -102,11 +126,18 @@ def read_root():
 @app.get("/gen")
 def gen(
     pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
-    neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living",
+    neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, perspective, 3D, depth, shadows, vanishing point, isometric, gradient shading, foreshortening, parallax, skewed angles, distorted, photorealistic, realistic lighting, complex shading, dynamic lighting, occlusion",
 ):
+    llm_helper = app.package["llm_helper"]
+    tile_prompts = app.package["tile_prompts"]
+    pos_prompt = "Help me create a top-view image prompt based on this: " + pos_prompt
+
+    if USE_LLM:
+        pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
     # for efficiency purposes we will return existing image
-    with open("output.png", "rb") as f:
-        return Response(content=f.read(), media_type="image/png")
+    if DEBUG:
+        with open("output.png", "rb") as f:
+            return Response(content=f.read(), media_type="image/png")
 
     with torch.inference_mode():
         checkpoint = app.package["checkpoint"]
@@ -129,7 +160,7 @@ def gen(
 
         ksampler_8 = ksampler.sample(
             seed=random.randint(1, 2**64),
-            steps=15,
+            steps=STEPS,
             cfg=2.98,
             sampler_name="ddim",
             scheduler="karras",
@@ -152,6 +183,8 @@ def gen(
         img_bytes = BytesIO()
         final_image.save(img_bytes, format="PNG")
         img_bytes.seek(0)
+        print("Generated image for ", pos_prompt)
+        tile_prompts[generate_tile_id(0, 0)] = pos_prompt
 
     return StreamingResponse(img_bytes, media_type="image/png")
 
@@ -174,12 +207,34 @@ def inpaint(
         "A 2D game sprite, natural, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world, connected, smooth transition, natural"
     ),
     neg_prompt: str = Form(
-        "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, unconnected roads"
+        "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, perspective, 3D, depth, shadows, vanishing point, isometric, gradient shading, foreshortening, parallax, skewed angles, distorted, photorealistic, realistic lighting, complex shading, dynamic lighting, occlusion",
     ),
-    x: int = Form(...),
-    y: int = Form(...),
+    source_x: int = Form(...),
+    source_y: int = Form(...),
+    target_x: int = Form(...),
+    target_y: int = Form(...),
     extend_direction: str = Form(""),
 ):
+    llm_helper = app.package["llm_helper"]
+    tile_prompts = app.package["tile_prompts"]
+
+    prev_prompt = app.package["tile_prompts"].get(
+        generate_tile_id(source_x, source_y), ""
+    )
+
+    print("Got inpaint request for tile ", target_x, target_y)
+
+    if USE_LLM:
+        pos_prompt = (
+            "The scene that the player currently is in is a scene generated with this prompt: "
+            + prev_prompt
+            + " I want to create a scene that is connected to this scene. But don't be too creative. The scene should be connected to the current scene. "
+            + ". What would be the prompt for the scene when the player moves "
+            + extend_direction
+            + "?"
+        )
+
+        pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
 
     # Read the image file
     contents = image_file.file.read()
@@ -187,7 +242,7 @@ def inpaint(
         return JSONResponse(content={"error": "Invalid file type"}, status_code=400)
 
     # Save to temp file
-    temp_filename = "temp" + str(x) + "_" + str(y) + ".png"
+    temp_filename = "temp" + str(target_x) + "_" + str(target_y) + ".png"
     ComfyUI_image_dir = "ComfyUI/input/"
     temp_filepath = ComfyUI_image_dir + temp_filename
     with open(temp_filepath, "wb") as f:
@@ -236,7 +291,7 @@ def inpaint(
 
             ksampler_8 = ksampler.sample(
                 seed=random.randint(1, 2**64),
-                steps=20,
+                steps=STEPS,
                 cfg=3,
                 sampler_name="ddim",
                 scheduler="karras",
@@ -258,6 +313,8 @@ def inpaint(
             img_bytes = BytesIO()
             final_image.save(img_bytes, format="PNG")
             img_bytes.seek(0)
+
+            tile_prompts[generate_tile_id(target_x, target_y)] = pos_prompt
 
             print("Inpainting done for ", temp_filename)
             # save file
