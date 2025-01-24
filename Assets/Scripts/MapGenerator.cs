@@ -109,7 +109,7 @@ public class MapGenerator : MonoBehaviour
             return;
         }
         Vector3 userPosition = Camera.main.transform.position;
-        // CheckAdditionalMapTile(new Vector2(userPosition.x, userPosition.y));
+        CheckAdditionalMapTile(new Vector2(userPosition.x, userPosition.y));
 
     }
 
@@ -553,22 +553,15 @@ public class MapGenerator : MonoBehaviour
             return;
         }
 
-        // get the tile size
-        SpriteRenderer spriteRenderer = tile.GetComponent<SpriteRenderer>();
-        Sprite sprite = spriteRenderer.sprite;
-        Texture2D texture = sprite.texture;
-        int width = texture.width;
-        int height = texture.height;
-
         for (int i = 0; i < enemyCount; i++)
         {
             // get the random position
-            float randomX = UnityEngine.Random.Range(0, width);
-            float randomY = UnityEngine.Random.Range(0, height);
+            float randomX = UnityEngine.Random.Range(0, spriteSquareSize);
+            float randomY = UnityEngine.Random.Range(0, spriteSquareSize);
 
             // get the position in the world
             Vector3 worldPosition = tile.transform.position;
-            Vector3 position = new Vector3(worldPosition.x - width / 2 + randomX, worldPosition.y - height / 2 + randomY, 0);
+            Vector3 position = new Vector3(worldPosition.x - spriteSquareSize / 2 + randomX, worldPosition.y - spriteSquareSize / 2 + randomY, 0);
 
             // create the enemy
             GameObject enemy = Instantiate(enemyPrefab, position, UnityEngine.Quaternion.identity);

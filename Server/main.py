@@ -30,7 +30,7 @@ DEBUG = True
 
 STEPS = 10
 
-USE_LLM = False
+USE_LLM = True
 
 NECESSARY_PROMPTS = (
     "A 2D game sprite, Pixel art, 64 bit, top down view, 2d tilemap, game, flat design"
@@ -133,13 +133,13 @@ def gen(
     pos_prompt = (
         "Help me create a top down view image prompt based on this: " + pos_prompt
     )
+    if DEBUG:
+        with open("output.png", "rb") as f:
+            return Response(content=f.read(), media_type="image/png")
 
     if USE_LLM:
         pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
     # for efficiency purposes we will return existing image
-    if DEBUG:
-        with open("output.png", "rb") as f:
-            return Response(content=f.read(), media_type="image/png")
 
     with torch.inference_mode():
         checkpoint = app.package["checkpoint"]
@@ -217,6 +217,11 @@ def inpaint(
     target_y: int = Form(...),
     extend_direction: str = Form(""),
 ):
+
+    if DEBUG:
+        with open("output.png", "rb") as f:
+            return Response(content=f.read(), media_type="image/png")
+
     llm_helper = app.package["llm_helper"]
     tile_prompts = app.package["tile_prompts"]
 
