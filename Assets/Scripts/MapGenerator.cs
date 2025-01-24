@@ -48,6 +48,16 @@ public class MapGenerator : MonoBehaviour
 
     public Canvas canvas;
 
+    public GameObject inputsUI;
+
+    public GameObject loadingUI;
+
+    public GameObject enemiesGroup;
+
+    public GameObject enemyPrefab;
+
+    public int maxEnemySpawnPerTile;
+
     private string baseUrl = "http://127.0.0.1:8765";  // Change this if your server IP differs
 
     public bool isGameTileMapInitialzied
@@ -99,7 +109,7 @@ public class MapGenerator : MonoBehaviour
             return;
         }
         Vector3 userPosition = Camera.main.transform.position;
-        CheckAdditionalMapTile(new Vector2(userPosition.x, userPosition.y));
+        // CheckAdditionalMapTile(new Vector2(userPosition.x, userPosition.y));
 
     }
 
@@ -112,7 +122,9 @@ public class MapGenerator : MonoBehaviour
             return;
         }
         // turn off canvas 
-        canvas.gameObject.SetActive(false);
+        this.inputsUI.gameObject.SetActive(false);
+        this.loadingUI.gameObject.SetActive(true);
+
         GenerateInitialMapTile(userSceneInput);
     }
 
@@ -216,6 +228,10 @@ public class MapGenerator : MonoBehaviour
             );
             Debug.Log("Image generated successfully");
             HandleGenerateImageSuccess(result);
+            inputsUI.gameObject.SetActive(true);
+            loadingUI.gameObject.SetActive(false);
+            canvas.gameObject.SetActive(false);
+
         }
         catch (Exception e)
         {
@@ -249,6 +265,7 @@ public class MapGenerator : MonoBehaviour
         GameObject spriteGameObject = CreateSpriteGameObject(texture, tileIndex);
         spriteRenderStatusDict[tileId] = SpriteRenderStatus.Rendered;
         Debug.Log("Image inpainted successfully for " + tileId);
+        RandomSpawnEnemyInTile(spriteGameObject);
     }
 
     void HandleInpaintImageError(string error)
@@ -270,6 +287,8 @@ public class MapGenerator : MonoBehaviour
 
             // Add sprite to the game object
             spriteGameObject.AddComponent<SpriteRenderer>().sprite = sprite;
+            // chagne order in layer
+            spriteGameObject.GetComponent<SpriteRenderer>().sortingOrder = -1;
 
             // Get the size of the game object and scale accordingly
             Vector2 spriteSize = spriteGameObject.GetComponent<SpriteRenderer>().bounds.size;
@@ -523,6 +542,37 @@ public class MapGenerator : MonoBehaviour
         {
             Debug.LogError(e);
             return (null, ExtendDirection.Up);
+        }
+    }
+
+    private void RandomSpawnEnemyInTile(GameObject tile)
+    {
+        int enemyCount = UnityEngine.Random.Range(0, maxEnemySpawnPerTile);
+        if (enemyCount == 0)
+        {
+            return;
+        }
+
+        // get the tile size
+        SpriteRenderer spriteRenderer = tile.GetComponent<SpriteRenderer>();
+        Sprite sprite = spriteRenderer.sprite;
+        Texture2D texture = sprite.texture;
+        int width = texture.width;
+        int height = texture.height;
+
+        for (int i = 0; i < enemyCount; i++)
+        {
+            // get the random position
+            float randomX = UnityEngine.Random.Range(0, width);
+            float randomY = UnityEngine.Random.Range(0, height);
+
+            // get the position in the world
+            Vector3 worldPosition = tile.transform.position;
+            Vector3 position = new Vector3(worldPosition.x - width / 2 + randomX, worldPosition.y - height / 2 + randomY, 0);
+
+            // create the enemy
+            GameObject enemy = Instantiate(enemyPrefab, position, UnityEngine.Quaternion.identity);
+            enemy.transform.parent = enemiesGroup.transform;
         }
     }
 

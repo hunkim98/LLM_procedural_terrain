@@ -26,14 +26,14 @@ import sys
 from typing import Sequence, Mapping, Any, Union
 import torch
 
-DEBUG = False
+DEBUG = True
 
 STEPS = 10
 
 USE_LLM = False
 
 NECESSARY_PROMPTS = (
-    "A 2D game sprite, Pixel art, 64 bit, top-view, 2d tilemap, game, flat design"
+    "A 2D game sprite, Pixel art, 64 bit, top down view, 2d tilemap, game, flat design"
 )
 
 
@@ -125,12 +125,14 @@ def read_root():
 
 @app.get("/gen")
 def gen(
-    pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top-view, 2d game map, urban, dessert, town, open world",
+    pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top down view, 2d game map, urban, desert, town, open world",
     neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, perspective, 3D, depth, shadows, vanishing point, isometric, gradient shading, foreshortening, parallax, skewed angles, distorted, photorealistic, realistic lighting, complex shading, dynamic lighting, occlusion",
 ):
     llm_helper = app.package["llm_helper"]
     tile_prompts = app.package["tile_prompts"]
-    pos_prompt = "Help me create a top-view image prompt based on this: " + pos_prompt
+    pos_prompt = (
+        "Help me create a top down view image prompt based on this: " + pos_prompt
+    )
 
     if USE_LLM:
         pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
@@ -229,7 +231,7 @@ def inpaint(
             "The scene that the player currently is in is a scene generated with this prompt: "
             + prev_prompt
             + " I want to create a scene that is connected to this scene. But don't be too creative. The scene should be connected to the current scene. "
-            + ". What would be the prompt for the scene when the player moves "
+            + ". What would be the top-down view prompt for the scene when the player moves "
             + extend_direction
             + "?"
         )
