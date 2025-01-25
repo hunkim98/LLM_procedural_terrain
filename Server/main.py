@@ -13,6 +13,7 @@ from threading import Semaphore
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import threading
 import LLMHelper
+import GPTHelper
 
 from fastapi import FastAPI, File, Form, UploadFile
 import torch
@@ -26,11 +27,13 @@ import sys
 from typing import Sequence, Mapping, Any, Union
 import torch
 
-DEBUG = True
+DEBUG = False
 
-STEPS = 10
+STEPS = 20
 
 USE_LLM = True
+
+mock = "city"  # ["city", "desert"]
 
 NECESSARY_PROMPTS = (
     "A 2D game sprite, Pixel art, 64 bit, top down view, 2d tilemap, game, flat design"
@@ -88,7 +91,9 @@ async def lifespan(app: FastAPI):
 
         vaeencodeforinpaint = NODE_CLASS_MAPPINGS["VAEEncodeForInpaint"]()
 
-        llm_helper = LLMHelper.LLMHelper()
+        gpt_helper = GPTHelper.GPTAPIHelper()
+
+        # llm_helper = LLMHelper.LLMHelper()
 
         tile_prompts = {}
 
@@ -100,8 +105,9 @@ async def lifespan(app: FastAPI):
             "ksampler": ksampler_efficient,
             "load_image": loadimage,
             "vae_encode_for_inpaint": vaeencodeforinpaint,
-            "llm_helper": llm_helper,
+            "gpt_helper": gpt_helper,
             "tile_prompts": tile_prompts,
+            # "llm_helper": llm_helper,
         }
         # print(app.package)
 
@@ -128,7 +134,8 @@ def gen(
     pos_prompt: str = "A 2D game sprite, Pixel art, 64 bit, top down view, 2d game map, urban, desert, town, open world",
     neg_prompt: str = "3D, walls, unnatural, rough, unrealistic, closed area, towered, limited, side view, watermark, signature, artist, inappropriate content, objects, game ui, ui, buttons, walled, grid, character, white edges, single portrait, edged, island, bottom ui, bottom blocks, player, creatures, life, uneven roads, human, living, perspective, 3D, depth, shadows, vanishing point, isometric, gradient shading, foreshortening, parallax, skewed angles, distorted, photorealistic, realistic lighting, complex shading, dynamic lighting, occlusion",
 ):
-    llm_helper = app.package["llm_helper"]
+    # llm_helper = app.package["llm_helper"]
+    gpt_helper = app.package["gpt_helper"]
     tile_prompts = app.package["tile_prompts"]
     pos_prompt = (
         "Help me create a top down view image prompt based on this: " + pos_prompt
@@ -137,8 +144,20 @@ def gen(
         with open("output.png", "rb") as f:
             return Response(content=f.read(), media_type="image/png")
 
+    if mock is not None:
+        # find 0_0.png in mock/city
+        with open(f"mock/{mock}/tile_prompts.json", "rb") as f:
+            # find 0_0 key in the json file
+            file = json.load(f)
+            prompt = file.get("0_0")
+            print(prompt)
+        with open(f"mock/{mock}/0_0.png", "rb") as f:
+            time.sleep(3)
+            return Response(content=f.read(), media_type="image/png")
+
     if USE_LLM:
-        pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
+        # pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
+        pos_prompt = NECESSARY_PROMPTS + gpt_helper.chat(pos_prompt)
     # for efficiency purposes we will return existing image
 
     with torch.inference_mode():
@@ -222,7 +241,20 @@ def inpaint(
         with open("output.png", "rb") as f:
             return Response(content=f.read(), media_type="image/png")
 
-    llm_helper = app.package["llm_helper"]
+    if mock is not None:
+        # find 0_0.png in mock/city
+        with open(f"mock/{mock}/tile_prompts.json", "rb") as f:
+            # find 0_0 key in the json file
+            file = json.load(f)
+            print("-------------------")
+            print("Prompt for ", target_x, target_y)
+            prompt = file.get(f"{target_x}_{target_y}")
+            print(prompt)
+        with open(f"mock/{mock}/{target_x}_{target_y}.png", "rb") as f:
+            time.sleep(3)
+            return Response(content=f.read(), media_type="image/png")
+    gpt_helper = app.package["gpt_helper"]
+    # llm_helper = app.package["llm_helper"]
     tile_prompts = app.package["tile_prompts"]
 
     prev_prompt = app.package["tile_prompts"].get(
@@ -236,12 +268,13 @@ def inpaint(
             "The scene that the player currently is in is a scene generated with this prompt: "
             + prev_prompt
             + " I want to create a scene that is connected to this scene. But don't be too creative. The scene should be connected to the current scene. "
-            + ". What would be the top-down view prompt for the scene when the player moves "
+            + ". What would be the adequate prompt for generating an image for the scene when the player moves "
             + extend_direction
             + "?"
         )
 
-        pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
+        # pos_prompt = NECESSARY_PROMPTS + llm_helper.chat(pos_prompt)
+        pos_prompt = NECESSARY_PROMPTS + gpt_helper.chat(pos_prompt)
 
     # Read the image file
     contents = image_file.file.read()

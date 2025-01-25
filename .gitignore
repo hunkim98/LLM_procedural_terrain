@@ -112,3 +112,5 @@ TextMesh Pro/
 
 # all images starting with temp
 temp*.png
+
+.env

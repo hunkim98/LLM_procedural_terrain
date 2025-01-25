@@ -34,6 +34,8 @@ public class MapGenerator : MonoBehaviour
 
     private float spriteSquareSize;
 
+    private string userSceneInput;
+
     public Dictionary<string, SpriteRenderStatus> spriteRenderStatusDict
     {
         get;
@@ -124,7 +126,7 @@ public class MapGenerator : MonoBehaviour
         // turn off canvas 
         this.inputsUI.gameObject.SetActive(false);
         this.loadingUI.gameObject.SetActive(true);
-
+        this.userSceneInput = userSceneInput;
         GenerateInitialMapTile(userSceneInput);
     }
 
@@ -227,10 +229,10 @@ public class MapGenerator : MonoBehaviour
                 prompt
             );
             Debug.Log("Image generated successfully");
-            HandleGenerateImageSuccess(result);
             inputsUI.gameObject.SetActive(true);
             loadingUI.gameObject.SetActive(false);
             canvas.gameObject.SetActive(false);
+            HandleGenerateImageSuccess(result);
 
         }
         catch (Exception e)
@@ -246,6 +248,18 @@ public class MapGenerator : MonoBehaviour
         // create new game object
         GameObject spriteGameObject = CreateSpriteGameObject(texture, new Vector2(0, 0));
         spriteRenderStatusDict[seedTileId] = SpriteRenderStatus.Rendered;
+
+        // SAVE TEXTURE
+        // create this.userSceneInput folder
+        string folderPath = Path.Combine(Application.persistentDataPath, this.userSceneInput);
+        if (!Directory.Exists(folderPath))
+        {
+            Directory.CreateDirectory(folderPath);
+        }
+        string filePath = Path.Combine(Application.persistentDataPath, this.userSceneInput, seedTileId + ".png");
+        byte[] imageBytes = texture.EncodeToPNG();
+        File.WriteAllBytes(filePath, imageBytes);
+        Debug.Log("Image inpainted successfully for " + filePath);
     }
 
     void HandleGenerateImageError(string error)
@@ -340,8 +354,18 @@ public class MapGenerator : MonoBehaviour
             byte[] imageBytes = sourceTexture.EncodeToPNG();
             string directionName = Enum.GetName(typeof(ExtendDirection), extendDirection);
 
-            string filePath = Path.Combine(Application.persistentDataPath, "InpaintSource" + tileId + ".png");
-            File.WriteAllBytes(filePath, imageBytes);
+            string folderPath = Path.Combine(Application.persistentDataPath, this.userSceneInput);
+            if (!Directory.Exists(folderPath))
+            {
+                Directory.CreateDirectory(folderPath);
+            }
+            string inpaintFolderPath = Path.Combine(folderPath, "Inpaint");
+            if (!Directory.Exists(inpaintFolderPath))
+            {
+                Directory.CreateDirectory(inpaintFolderPath);
+            }
+            string inpaintTilePath = Path.Combine(inpaintFolderPath, tileId + ".png");
+            File.WriteAllBytes(inpaintTilePath, imageBytes);
 
             Debug.Log("Inpainting image..." + directionName + new Vector2(indexX, indexY));
             int sourceX = (int)currentTileIndex.x;
@@ -355,7 +379,7 @@ public class MapGenerator : MonoBehaviour
                 spriteRenderStatusDict.Add(tileId, SpriteRenderStatus.Pending);
             }
             Texture2D result = await this.serverClient.InpaintImageAsync(
-                filePath,
+                inpaintTilePath,
                 sourceX,
                 sourceY,
                 indexX,
@@ -364,7 +388,8 @@ public class MapGenerator : MonoBehaviour
                 posPrompt: ""
             );
             // Save the image to the disk
-            string outputFilePath = Path.Combine(Application.persistentDataPath, "InpaintOutput" + tileId + ".png");
+
+            string outputFilePath = Path.Combine(Application.persistentDataPath, this.userSceneInput, tileId + ".png");
             byte[] resultBytes = result.EncodeToPNG();
             File.WriteAllBytes(outputFilePath, resultBytes);
             Debug.Log("Image inpainted successfully for " + directionName);
